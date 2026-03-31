@@ -88,6 +88,7 @@
   - 与 T1 紧密相关，注意术语一致
 - 备注：
   - 2026-03-31：已完成 `notes/05-tools-permissions.md`，明确工具抽象、工具池装配、`tool_use -> tool_result` 执行链、通用 permission pipeline、文件系统边界、Bash 特例与 auto mode 下危险规则剥离逻辑
+  - 2026-03-31：按用户反馈补做一轮可读性改写，在笔记开头加入 overview、ASCII 框图和三组核心边界，后续 tutorial 正文优先沿这种“先给地图，再拆控制流”的写法推进
 
 ### T4. CLI Entry + UI Shell 研究笔记
 

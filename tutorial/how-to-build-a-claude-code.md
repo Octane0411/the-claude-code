@@ -18,7 +18,7 @@
 
 1. [总览：Claude Code 到底是什么](./01-overview.md)
 2. [Agent Loop：Claude Code 真正的核心循环](./02-agent-loop.md)
-3. 上下文管理：模型每次到底看到了什么
+3. [上下文管理：模型每次到底看到了什么](./03-context-management.md)
 4. 工具系统：从工具注册到实际执行
 5. 权限控制：为什么它敢帮你跑命令
 6. 记忆系统：上下文窗口之外的信息如何保存与回流
@@ -34,6 +34,7 @@
 
 - [01-overview.md](./01-overview.md)
 - [02-agent-loop.md](./02-agent-loop.md)
+- [03-context-management.md](./03-context-management.md)
 
 ## 独立专题
 

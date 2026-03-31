@@ -219,6 +219,27 @@
   - 开始 `Tasks + Subagents` 研究笔记
   - 重点梳理任务对象、subagent 工具入口、远端执行路径，以及它们与 `agent loop` / `AppState` / `tool runtime` 的连接方式
 
+## 2026-03-31 - 调整 Tools + Permissions 笔记的可读性写法
+
+- 完成：
+  - 按用户反馈重写 `notes/05-tools-permissions.md` 的开头结构
+  - 新增“先看地图”总览区块，先把工具系统拆成工具定义、工具池裁剪、`tool_use` 执行回注三层
+  - 新增两张 ASCII 框图：一张总图，一张单次 `tool_use` 执行流程图
+  - 补入三组最容易混淆的边界：`command` vs `tool`、可见 vs 可执行、`Tool.checkPermissions()` vs 完整权限系统
+- 依据：
+  - `notes/05-tools-permissions.md`
+  - 用户对现有写法“还不够清晰易懂，需要先给 overview / 框图”的直接反馈
+- 更新文件：
+  - `notes/05-tools-permissions.md`
+  - `notes/02-work-queue.md`
+  - `notes/03-work-log.md`
+- 阻塞 / 风险：
+  - 目前只对 `notes/05` 做了试改，其他章节仍然保留更偏源码拆解的旧写法
+  - 新写法是否足够清楚，还要看用户是否认可这种“先给总图、再讲边界、最后讲细节”的结构
+- 下一步：
+  - 如果这种写法有效，就把后续 tutorial 和 notes 默认改成“overview 先行”的表达方式
+  - 若继续正文链，回头重写 `tutorial/03-context-management.md` 的开头结构再推进下一章
+
 ## 2026-03-31 - 产出 Harness 独立专题
 
 - 完成：

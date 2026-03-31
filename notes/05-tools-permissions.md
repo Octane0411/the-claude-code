@@ -33,6 +33,121 @@ Claude Code 的 tools 和 permissions 是两个耦合但不同层的系统：
 - 有些调用即使在 `bypassPermissions` 下也仍然必须 ask
 - auto mode 并不是“全部自动允许”，而是“规则预处理 + 快速路径 + classifier + denial tracking”的一整套决策链
 
+## 先看地图
+
+如果你现在只想先抓住全貌，不要立刻扎进 `Tool.ts` 的接口细节。先记住 Claude Code 这里其实在同时处理三件不同的事：
+
+1. 模型这一轮“看得到哪些工具”
+2. 模型发出的 `tool_use` “会不会真的执行”
+3. 工具跑完以后，“结果怎么重新回到 query loop”
+
+把这三件事拆开之后，源码就容易读很多。
+
+### 一张总图
+
+```text
+                工具定义层
+                     |
+                     v
+        +---------------------------+
+        | Tool 对象                 |
+        | - schema / description    |
+        | - call()                  |
+        | - validateInput()         |
+        | - checkPermissions()      |
+        | - UI / transcript 渲染    |
+        +---------------------------+
+                     |
+                     v
+        +---------------------------+
+        | tools.ts / getTools()     |
+        | - built-in tools          |
+        | - MCP tools               |
+        | - deny rule 预裁剪        |
+        | - REPL wrapper / defer    |
+        +---------------------------+
+                     |
+                     v
+              模型看到的工具表
+                     |
+                     v
+           assistant 产出 tool_use
+                     |
+                     v
+        +---------------------------+
+        | toolExecution /           |
+        | toolOrchestration         |
+        | - 找工具                  |
+        | - schema 校验             |
+        | - hook                    |
+        | - permission 决策         |
+        | - 真正执行 tool.call()    |
+        +---------------------------+
+                     |
+                     v
+              产出 tool_result
+                     |
+                     v
+                回到 query loop
+```
+
+这张图最重要的不是模块名，而是一个阅读顺序：
+
+- 先看工具对象长什么样
+- 再看工具池是怎么裁剪出来的
+- 最后看一次 `tool_use` 是怎么被执行和回注的
+
+### 一张执行流程图
+
+如果只看单次调用，Claude Code 的主路径可以先压成下面这样：
+
+```text
+assistant 发出 tool_use
+  -> 当前工具池里能不能找到这个工具？
+  -> 输入 schema 对不对？
+  -> validateInput 语义上合不合理？
+  -> PreToolUse hooks 要不要改输入或拦截？
+  -> permission 结果是 allow / ask / deny？
+  -> 真正执行 tool.call()
+  -> 包装成 tool_result
+  -> PostToolUse / Failure hooks
+  -> 把 tool_result 回注给模型
+```
+
+如果你先记住这条线，再去读 `toolExecution.ts` 和 `permissions.ts`，很多判断分支就不会显得散。
+
+### 先记住三个最容易混的边界
+
+#### 1. `command` 不是 `tool`
+
+- `command` 是用户显式输入的 `/review`、`/memory`
+- `tool` 是模型在 loop 里自己发起的 `tool_use`
+
+这两个系统都会影响“Claude Code 能做什么”，但不是同一个入口。
+
+#### 2. “模型看得到工具”不等于“工具一定会执行”
+
+Claude Code 会分两层处理：
+
+- prompt 前先裁掉一批肯定不能用的工具
+- 真正调用时再做更细的 permission 决策
+
+所以“可见”和“可执行”是两个不同问题。
+
+#### 3. `Tool.checkPermissions()` 不等于完整权限系统
+
+工具对象自己的 `checkPermissions()` 只是其中一层。
+
+完整决策还会叠加：
+
+- deny / ask / allow rules
+- mode
+- classifier
+- headless / async-agent 特殊策略
+- hooks
+
+所以不要把“某个工具里有 `checkPermissions()`”误读成“权限都在工具内部完成了”。
+
 ## 必读源码入口
 
 ### 工具抽象与工具池
