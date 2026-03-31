@@ -22,6 +22,8 @@ Secondary deliverables:
 
 ## Writing Rules
 
+### Content Requirements
+
 - each tutorial chapter should answer both:
   - how Claude Code appears to work
   - how to build the same capability in a clean implementation
@@ -30,6 +32,26 @@ Secondary deliverables:
 - keep notes factual and source-cited
 - separate source reading from design opinion
 - call out version assumptions when relevant
+
+### Tone and Style
+
+参考风格：Anthropic engineering blog（https://www.anthropic.com/engineering）。核心特征：
+
+- 像一个工程师读完源码后跟同事讲，不像教科书或分析报告
+- 用具体的源码证据（函数签名、文件路径、代码模式）锚定技术判断，不做没有出处的空泛断言
+- 主观设计意见用"我"来表达，不伪装成客观事实
+- 按问题推进（先讲为什么会坏，再讲怎么解决），不按源码目录平铺
+- 承认限制和代价，不只讲好处。具体数字和 honest tradeoff 比乐观总结更有说服力
+
+### 禁止的写作模式
+
+- 不用"换句话说""也就是说""简单来说"这类过渡模板——如果前面说清楚了就不需要换一种方式再说一遍
+- 不用"关键设计一/二/三/四/五"这种机械列举框架——用问题和叙事驱动结构
+- 不密集使用粗体强调——粗体只用于真正需要读者注意的关键判断，每节最多一处
+- 不在每段开头用问句再自己回答（"那么 X 是什么？X 是……"）
+- 不写空洞的总结段落（"综上所述，我们可以看到……"）
+- 不用"本质上""从根本上说""毫无疑问"这类增加气势但不增加信息的修饰语
+- 每篇结尾不需要"本篇结论"或"总结"段——如果正文写到位了，读者自己能得出结论
 
 ## Directory Conventions
 
