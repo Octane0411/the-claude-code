@@ -17,7 +17,7 @@
 ## 暂定章节
 
 1. [总览：Claude Code 到底是什么](./01-overview.md)
-2. Agent Loop：Claude Code 真正的核心循环
+2. [Agent Loop：Claude Code 真正的核心循环](./02-agent-loop.md)
 3. 上下文管理：模型每次到底看到了什么
 4. 工具系统：从工具注册到实际执行
 5. 权限控制：为什么它敢帮你跑命令
@@ -33,6 +33,7 @@
 ## 当前已完成
 
 - [01-overview.md](./01-overview.md)
+- [02-agent-loop.md](./02-agent-loop.md)
 
 ## 每章模板
 

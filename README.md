@@ -52,6 +52,7 @@
 如果你想直接开始阅读正文，请先看：
 
 - `tutorial/01-overview.md`
+- `tutorial/02-agent-loop.md`
 
 当前研究路线图见：
 
