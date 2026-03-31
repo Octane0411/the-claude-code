@@ -249,3 +249,35 @@
 - 下一步：
   - 回到默认主线，继续 `Tasks + Subagents` 研究笔记
   - 若后续 Tools / Permissions 章节成文，可把 harness 文章里的部分判断回勾进主教程正文
+
+## 2026-03-31 - 重写 Harness 文章风格
+
+- 完成：
+  - 按用户反馈重写 `tutorial/claude-code-harness.md`
+  - 把原先偏“分层定义 + 总结归纳”的写法，改成更接近 Anthropic Engineering 的问题驱动叙事
+  - 新版本以 naive harness 的失败模式开场，再展开 Claude Code 在 session runtime、内部路径、artifact 管理、side channel、权限放行和 control plane 上的具体做法
+  - 显式补入这套设计的代价与待验证点，减少泛化结论和教学腔
+- 依据：
+  - `tutorial/claude-code-harness.md` 旧稿
+  - `https://www.anthropic.com/engineering/harness-design-long-running-apps`
+  - `https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents`
+  - `../claude-code-sourcemap/restored-src/src/setup.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/toolResultStorage.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/BashTool/BashTool.tsx`
+  - `../claude-code-sourcemap/restored-src/src/utils/mcpOutputStorage.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/claudeCodeHints.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/permissions/filesystem.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/SessionMemory/sessionMemory.ts`
+  - `../claude-code-sourcemap/restored-src/src/memdir/memdir.ts`
+  - `../claude-code-sourcemap/restored-src/src/cli/structuredIO.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/teleport.tsx`
+- 更新文件：
+  - `tutorial/claude-code-harness.md`
+  - `notes/02-work-queue.md`
+  - `notes/03-work-log.md`
+- 阻塞 / 风险：
+  - 目前只是叙事风格重构，没有同步把 `notes/10-harness.md` 改写成同样风格；提纲仍偏研究笔记格式
+  - 远端与 runtime 行为的判断仍主要来自 restored source 与官网工程文章，不等于已安装客户端逐项验证
+- 下一步：
+  - 如用户认可这版叙事风格，可继续用同样方法改写后续正文章节
+  - 回到默认主线，继续 `Tasks + Subagents` 研究笔记

@@ -1,337 +1,328 @@
 # Claude Code 是怎么构建 harness 的
 
-## 这篇文章要回答什么
+## 问题不是“怎么调用模型”，而是“怎么让它持续工作”
 
-很多人第一次接触 Claude Code，会把它理解成：
+讲 Claude Code 时，最容易把注意力放在三样东西上：
 
-- 一个终端 UI
-- 一个 prompt
-- 一组工具
-- 一个会反复调用模型的 loop
+- system prompt
+- tool schema
+- agent loop
 
-这些都没错，但还不够。
+这些当然重要，但如果只把系统做成“模型 + 工具 + 一个循环”，很快就会撞上几个很现实的问题。
 
-如果只用这几个词来理解 Claude Code，很容易忽略一个真正决定系统工程质量的层：
+第一，工具输出会失控。  
+一条 shell 命令、一次搜索、一次代码生成，很容易产生远超当前上下文窗口承受能力的结果。直接把这些内容塞回下一轮消息里，不但贵，而且会污染后续推理。
 
-**harness。**
+第二，模型需要一个稳定的工作面。  
+如果 agent 在多轮交互里会读自己的计划、检查上一次生成的摘要、回看大型工具结果，那它需要的就不只是用户工作区，而是一组由 runtime 自己维护的内部状态文件。
 
-这篇文章要回答的是：
+第三，权限和宿主控制不能散在工具内部。  
+本地模式、远端模式、UI 审批、SDK host 审批，本质上都在回答同一个问题：这次工具调用到底谁说了算。如果这个问题没有单独的一层来处理，工具系统很快会变得不可维护。
 
-- 我理解的 `harness` 到底是什么
-- Claude Code 看起来是怎样把它构建出来的
-- 如果你自己实现一个 Claude Code-like 系统，应该如何把这层做得更干净
+第四，有些信号根本不应该进模型上下文。  
+例如插件安装提示、宿主级通知、控制事件。这些信息对产品有用，但如果直接暴露给模型，只会增加噪声，甚至改变行为。
 
-## 先给结论
+我现在对 Claude Code 的理解是：  
+**harness 就是为了解决这些问题而长出来的一层 runtime。**
 
-在当前可见源码里，Claude Code 的 `harness` 不是一个单独的 `Harness.ts`，而是一层分散实现的 runtime shell。
+在当前可见源码里，它不是一个单独的 `Harness.ts`，而是一组围绕 session、文件、工具输出、权限和控制协议搭起来的工程约束。
 
-它做的事情不是“替模型思考”，而是：
+## naive 实现为什么会失效
 
-- 在启动期搭好运行时骨架
-- 给模型准备一组受控的内部状态面
-- 把工具调用变成可权限化、可持久化、可恢复的执行
-- 改写模型最终能看到的输出
-- 在本地宿主、远端宿主和 UI 之间维护控制协议
+先把对照组说清楚。
 
-所以如果让我用一句话概括：
-
-**模型是决策器，harness 是操作系统边界层。**
-
-## 先纠正一个常见误区
-
-如果你在源码里直接搜 `harness`，会找到不少注释，但找不到一个中心化的 `Harness` 类。
-
-这不是因为 Claude Code 没有 harness，而是因为它把 harness 拆进了几类横切职责里：
-
-- 启动与 session 初始化
-- 内部目录和持久化
-- 权限判定
-- 工具输出改写
-- 控制消息协议
-- 远端模式适配
-
-这恰好说明，在 Claude Code 的实际工程里，`harness` 更接近一种 runtime 组织方式，而不是一个单独模块名。
-
-## 第一层：启动时先把运行时壳搭起来
-
-最能说明问题的文件之一是 `src/setup.ts`。
-
-这里最值得注意的不是参数解析，而是它在首轮 query 之前就做了很多 background runtime 的准备工作，例如：
-
-- 注册 `initSessionMemory()`
-- 初始化 `context collapse`
-- 预取 `commands`
-- 预加载 plugin hooks
-
-这说明 Claude Code 不是等模型第一次要用某个能力时再临时补环境，而是先把一层运行时骨架搭起来，再让 agent loop 进去跑。
-
-这正是 harness 思维。
-
-如果你自己实现一个简化版系统，这里最容易偷懒成：
+一个最朴素的 coding agent 通常长这样：
 
 1. 收到用户输入
 2. 调模型
-3. 如果模型要用工具，再临时初始化一堆东西
+3. 解析 `tool_use`
+4. 执行工具
+5. 把工具结果原样喂回模型
+6. 循环直到模型停止
 
-Claude Code 走的显然不是这条路。它更像：
+这个版本在短任务上能工作，但一旦任务变长，失败模式会很稳定。
 
-1. 先建立 session 运行时
-2. 再启动 query loop
+### 失败模式一：工具结果没有归宿
 
-这样做的收益是很直接的：
+如果工具输出很长，系统通常只有两个选择：
 
-- 生命周期更稳定
-- 工具环境更一致
-- session 级状态更容易持有
-- 后续加入远端模式、恢复、插件和 background tasks 时不容易失控
+- 截断
+- 强行塞回上下文
 
-## 第二层：harness 先准备一组内部状态通道
+截断会丢信息。强行塞回上下文会让后续每一轮都背着历史包袱。
 
-如果只看模型调用工具，你会以为 Claude Code 的世界就是工作区文件和 shell。
+这类系统表面上看“支持工具”，实际上并没有给工具结果一个持久、可寻址、可延迟读取的落点。
 
-但源码显示，Claude Code 还专门维护了一批**内部路径**，用来承接运行时状态和工具副产物。
+### 失败模式二：模型没有自己的内部工作面
 
-典型例子包括：
+长任务里的 agent 不只需要读项目文件，还会不断生成中间产物：
+
+- 本轮摘要
+- 会话记忆
+- 计划文件
+- 测试输出
+- 大型工具结果
+
+如果这些东西只是临时字符串，而不是 runtime 管理的文件面，agent 每过几轮就得重新“猜”系统当前处于什么状态。
+
+### 失败模式三：权限和审批逻辑会渗到每个工具
+
+如果没有统一控制层，工具会开始各自处理：
+
+- 能不能执行
+- 谁批准
+- UI 怎么提示
+- 远端怎么回传
+
+最后结果通常是本地模式能跑，远端模式另写一套，SDK host 又是第三套。
+
+### 失败模式四：模型和宿主之间没有 side channel
+
+有些信息应该给用户，不该给模型。
+
+如果系统没有 side channel，工程上就只剩两条路：
+
+- 信息彻底丢弃
+- 信息进入模型上下文
+
+这两种都不好。前者损失产品能力，后者污染推理环境。
+
+## Claude Code 的做法：先搭一个 session-local runtime
+
+Claude Code 当前源码最有意思的一点，是它并没有把这些问题分散留给各个工具自己解决，而是先搭了一层 session runtime，再让 query loop 在上面工作。
+
+这个思路在 `src/setup.ts` 很明显。
+
+`setup()` 做的不只是启动参数处理。它会在首轮 query 之前注册或预热一批 runtime 设施，包括：
+
+- `initSessionMemory()`
+- plugin hooks 的预加载
+- commands 的预取
+- 某些 background feature 的初始化
+
+这意味着 Claude Code 不是“等模型第一次需要某个能力时再临时创建环境”，而是先把运行时壳搭好，再进入主循环。
+
+这类设计有个很实际的好处：后面的工具执行、权限协商、状态落盘，都能建立在一个已经存在的 session world 上，而不是每轮现拼。
+
+## 关键设计一：给 agent 一组内部路径，而不只是一个工作区
+
+在 Claude Code 里，模型不是只面对用户项目目录。
+
+源码里可以看到几类明确的内部路径：
 
 - `session-memory`
 - `plans`
 - `tool-results`
 - `auto memory`
 - `agent memory`
+- `scratchpad`
+- project temp
 
-例如：
+这不是实现细节，而是 harness 的核心。
 
-- `src/utils/toolResultStorage.ts` 会把 session 目录组织成 `projectDir/sessionId/tool-results`
-- `src/services/SessionMemory/sessionMemory.ts` 会创建 `session-memory/summary.md`
-- `src/memdir/memdir.ts` 多处直接写明 harness 会保证 memory 目录已经存在，模型可以直接写
+例如，`src/utils/toolResultStorage.ts` 会把 session 目录组织成 `projectDir/sessionId/tool-results`。  
+`src/services/SessionMemory/sessionMemory.ts` 会创建 `session-memory/summary.md`。  
+`src/memdir/memdir.ts` 甚至直接写了注释，说明 harness 会保证 memory 目录已存在，模型可以直接写。
 
-这里最关键的工程含义是：
+这几个点放在一起看，信号很强：
 
-**Claude Code 并不是让模型直接面对整个文件系统，而是先在文件系统里开辟一批由 runtime 控制的“内部回流面”。**
+**Claude Code 不只是让模型“能读写文件”，而是先定义了一组 runtime 自己维护的内部文件面。**
 
-这样做有两个好处：
+这组文件面解决了两个问题。
 
-第一，很多原本太大、太临时、太内部的结果不需要硬塞进上下文，可以先落盘再按需读取。  
-第二，权限系统可以对这批路径做特殊处理，把“运行时自己的产物”和“用户真实工作区”区分开来。
+第一，它给长任务一个稳定的中间状态承载层。  
+第二，它让权限系统有机会区分“用户项目内容”和“runtime 自己的产物”。
 
-## 第三层：权限系统把这些内部路径变成受控世界
+## 关键设计二：把工具输出变成受控 artifact，而不是一段大字符串
 
-这也是我认为 harness 概念最清楚的一层。
+这一点在 `src/tools/BashTool/BashTool.tsx` 里最直观。
 
-在 `src/utils/permissions/filesystem.ts` 里，可以看到权限系统显式放行了若干 internal harness paths，包括：
+当 shell 输出过大时，Claude Code 并不尝试把完整内容继续塞进消息里。它会：
+
+1. 把输出持久化到 `tool-results/`
+2. 给当前回合保留一个较小的预览
+3. 把完整结果留成后续可读取文件
+
+这其实是在把“工具结果”从一次性文本，改造成 session 内的 artifact。
+
+这一步很关键，因为它改变了模型和工具结果之间的关系：
+
+- 在 naive 版本里，工具结果只能“现在就看”
+- 在 Claude Code 里，工具结果可以“先落盘，后续再按需读”
+
+这不只是 token 优化。它直接影响 agent 能不能在长任务里维持工作连续性。
+
+同样的思路也出现在 `src/utils/mcpOutputStorage.ts` 里。MCP 返回过大的文本或二进制内容时，系统也倾向于先落成文件，再告诉模型如何顺序读取。
+
+也就是说，Claude Code 的 harness 在这里承担的是 artifact management，不是简单 I/O 包装。
+
+## 关键设计三：有些输出只给宿主，不给模型
+
+`src/utils/claudeCodeHints.ts` 很能说明 Claude Code 的工程取向。
+
+这里定义了一种 `<claude-code-hint />` 协议：CLI 或 SDK 可以在 stderr 发一个自闭合标签，shell 工具会扫描输出，把这个标签剥离掉，然后只把提示信息交给 UI 侧使用。
+
+注释里说得很直白：  
+这是 a harness-only side channel。
+
+这个设计解决的是前面提到的第四种失败模式。
+
+系统终于有了第三条路：
+
+- 不是把提示丢掉
+- 也不是让模型看到提示
+- 而是通过 harness 拦截并转交给宿主
+
+这种设计看起来不起眼，但它说明 Claude Code 已经明确把“模型上下文”和“产品级宿主信号”分成了两条通道。
+
+这是成熟 agent runtime 和 demo agent 的一个明显分水岭。
+
+## 关键设计四：权限系统认识这些内部路径
+
+只有内部路径还不够。系统还得知道这些路径和普通用户文件不一样。
+
+`src/utils/permissions/filesystem.ts` 的处理方式很有代表性。权限判断里专门有一段 internal path 逻辑，会对下列内容直接放行读取：
 
 - `session-memory`
 - `plans`
 - `tool-results`
 - `scratchpad`
 - project temp
-- agent memory
-- auto memory
-- tasks
-- teams
+- `agent memory`
+- `auto memory`
+- `tasks`
+- `teams`
 
-这件事非常重要，因为它意味着：
+这说明 Claude Code 的权限模型不是简单的“工作区内允许，工作区外询问”。
 
-Claude Code 不是简单地“给模型一个 Read 工具”，而是先定义一套 runtime 自己认可的内部世界，再让模型在这个世界里读写。
+它实际上至少区分了三层东西：
 
-换句话说，模型并不天然拥有“随便读文件”的能力。它读到的很多东西，其实是 harness 先布置好的材料。
+1. 用户工作区
+2. harness 自己维护的内部状态路径
+3. 更外部的系统路径
 
-这和很多 toy agent 的差别非常大。后者往往只有两种状态：
+这层区分非常值钱。
 
-- 全放开
-- 全阻断
+如果没有它，模型想读上轮的大工具结果时，要么被迫重新运行工具，要么被权限系统错误拦截。两种都会把长任务体验拉坏。
 
-Claude Code 走的是第三条路：
+Claude Code 在这里做的事很朴素，但很有效：
 
-**给模型一套受控的内部文件面，让它在这个面上表现得像“有长期状态”和“能读完整结果”，但底层仍然由 runtime 保持边界。**
+**先定义一批内部 artifact 路径，再让权限系统显式认识它们。**
 
-## 第四层：工具输出不会原样回给模型
+## 关键设计五：harness 还是一个 control plane
 
-这是 harness 最容易被忽略、但又最像“产品工程”的地方。
+如果只看到文件和工具结果，你会把 harness 理解成 I/O 层。Claude Code 比这更进一步。
 
-### 大输出不会直接塞回上下文
+`src/cli/structuredIO.ts` 里可以看到，权限协商是通过 `control_request` / `control_response` 跟宿主交互的。也就是说，工具是否可用，不是工具自己最终拍板，而是 runtime 把请求送到外部控制层，再等答复。
 
-`src/tools/BashTool/BashTool.tsx` 里，大输出会被复制到 `tool-results/`，然后只把路径和预览回给模型。
+远端模式下，这一点更明显。
 
-这背后其实有两个判断：
+`src/utils/teleport.tsx` 在创建远端 session 时，会把 `set_permission_mode` 当作初始事件预先写进去。这样远端 CLI 在第一轮用户消息到达之前，就已经处在正确的权限模式里。
 
-- 不应该把超长输出直接塞回上下文
-- 但也不能直接丢掉，因为模型后面可能还需要继续读
+这背后的设计很清楚：
 
-于是 harness 做了一个折中：
+- query loop 负责跑任务
+- harness 负责跟宿主同步控制状态
 
-1. 保存完整结果到内部目录
-2. 把这个文件路径当成下一轮可读取对象
-3. 只给当前上下文一个简化引用
+如果没有这一层，本地 CLI、远端容器、Web UI、SDK host 很快就会各有一套审批逻辑。
 
-这不是小优化，而是运行时设计。
+而一旦把这些行为都抽到 control plane 里，系统才有机会在不同宿主之间共享一套运行时契约。
 
-它把“工具执行结果”从一次性文本，变成了 session 里的可寻址资源。
+## 这套设计带来了什么
 
-### 某些输出只给用户，不给模型
+把前面几层放在一起看，Claude Code 的 harness 至少换来了四件事。
 
-`src/utils/claudeCodeHints.ts` 的注释更直接：  
-CLI 或 SDK 可以发出 `<claude-code-hint />` 标记，harness 会扫描并剥离这些标签，然后只给用户弹安装提示，模型本身看不到。
+### 1. 工具结果终于有了生命周期
 
-这说明 harness 还有一个很重要的职责：
+它们不再只是模型看到的一段文本，而是可以落盘、回读、跨轮引用的 session artifact。
 
-**区分哪些信号属于模型上下文，哪些信号属于宿主/UI 侧通道。**
+### 2. 长任务有了更稳定的中间状态面
 
-如果没有这层分离，很多工程提示、推荐、遥测相关信息都会污染模型上下文。
+`session-memory`、`plans`、`tool-results` 这类内部路径，让 agent 不必每次都从聊天历史里重新恢复全部状态。
 
-所以从工程角度看，Claude Code 的工具系统不是“执行完命令，把 stdout 喂回去”。
+### 3. 宿主信号不再污染模型上下文
 
-它更像：
+像 `claude-code-hint` 这样的协议，让产品能力和模型上下文可以解耦。
 
-1. 执行命令
-2. 清洗结果
-3. 判断哪些部分该持久化
-4. 判断哪些部分只给 UI
-5. 最后再生成模型可见版本
+### 4. 本地与远端至少有机会共享同一套控制语义
 
-这整条链，本质上都属于 harness。
+权限模式、审批请求、控制消息都有了一个明确的 runtime 承载层。
 
-## 第五层：harness 还包含 control plane
+## 代价也很明显
 
-如果说前面几层更多是在处理 I/O，那么 `control_request` 这一层说明 harness 还负责控制面。
+这套设计不是免费的。
 
-在 `src/cli/structuredIO.ts` 里，权限协商会通过 `control_request` / `control_response` 跟宿主通信。这里不是模型自己决定“我要不要执行这个工具”，而是 runtime 把请求送到宿主侧，再等待回应。
+第一，系统复杂度会上升。  
+一旦你引入内部路径、artifact 管理、控制协议和 side channel，调试成本会明显增加。
 
-远端模式下，这个控制面更明显。
+第二，恢复和迁移会变难。  
+只要 session 可以 resume、fork、切远端，`tool-results`、plan 文件、memory 文件到底怎么复制和引用，就会变成真实工程问题。
 
-`src/utils/teleport.tsx` 会在远端 session 创建时预先写入 `set_permission_mode` 事件，确保远端 CLI 在第一轮用户输入之前，就已经处在正确的权限模式里。
+第三，权限模型会更绕。  
+“什么是工作区内文件，什么是 harness 内部文件，什么是完全外部路径” 这种区分虽然必要，但会让规则体系更复杂。
 
-这说明 Claude Code 里的 harness 并不只是本地命令执行包装器，它还是：
+第四，local / remote 差异更难完全藏住。  
+源码里已经能看到不少 `CLAUDE_CODE_REMOTE` 相关逻辑。只要运行时跨宿主，这层差异迟早会冒出来。
 
-- 本地 CLI 与宿主之间的控制层
-- 远端容器与本地主界面之间的协商层
-- permission mode、tool approval、interrupt 等行为的统一协议层
+所以从工程角度看，harness 的价值和代价是一体两面：
 
-如果没有这层，远端运行时和本地 UI 会很快漂移成两套系统。
+**它解决的是长任务 runtime 的稳定性问题，而不是便宜地加几个功能。**
 
-## 第六层：harness 也影响“模型看到的上下文”
+## 如果让我自己实现，我会把这层显式收束
 
-这篇文章虽然重点不是 context，但还是要补一个关键判断：
+Claude Code 当前源码里的做法是“功能上已经形成 harness，但代码结构上仍然分散”。
 
-`src/context.ts` 里，system context 和 user context 也体现了 harness 的边界意识。
+这很正常，因为产品通常是渐进长出来的。但如果要做一个更干净的实现，我不会让 harness 只以隐含概念存在。
 
-例如：
+我会把它显式收束成一个 runtime 对象，至少包含：
 
-- 远端模式下会跳过某些本地 git status 注入
-- `CLAUDE.md`、memory 文件和日期信息会被统一组织进用户上下文
+- session 目录与内部路径注册
+- tool artifact 持久化
+- output rewriting
+- permission gate
+- host control channel
 
-这说明 harness 不只是拦截工具输出，它还在决定：
+原因很简单。Claude Code 现在这篇源码最有价值的启发，不是“某个函数怎么写”，而是：
 
-- 哪些宿主环境信息应该注入
-- 哪些环境下要省略注入
-- 哪些上下文应该缓存
+**当 agent 开始跨多轮、多工具、多宿主持续工作时，必须有一层代码专门负责管理模型和外部世界之间的边界。**
 
-也就是说，harness 同时控制了：
+那层代码，就是 harness。
 
-- 模型的输入边界
-- 模型的输出回流边界
+## 我现在对 Claude Code harness 的定义
 
-这正是它和“普通工具调用框架”的差别。
+看完这些实现后，我会把 Claude Code 的 harness 定义成下面这句话：
 
-## 如果你自己实现一个更干净的版本
+**它是一层 session-scoped runtime，负责给模型提供受控的工作面，把工具结果转成可管理的 artifact，维护模型不可见的宿主侧信号，并在本地与远端宿主之间同步控制语义。**
 
-Claude Code 当前源码把 harness 分散在不少模块里。研究它很有价值，但如果是自己实现，我建议把这层显式收束成一个独立概念。
+如果只说“Claude Code 会调用工具”，这个判断远远不够。
 
-例如，你完全可以先定义一个：
+更准确的说法应该是：
 
-```ts
-type HarnessRuntime = {
-  session: SessionRuntime
-  internalPaths: InternalPathRegistry
-  toolExecutor: ToolExecutor
-  permissionGate: PermissionGate
-  hostControl: HostControlChannel
-  outputRewriter: OutputRewriter
-}
-```
-
-然后按下面顺序做最小实现。
-
-### 1. 先做 session runtime
-
-至少要有：
-
-- session id
-- project root
-- internal state dir
-- transcript / tool-results / memory 等内部目录
-
-这一步不要先想 UI，要先把运行时地基打好。
-
-### 2. 再做 tool execution + result persistence
-
-核心不是“能跑 shell”，而是：
-
-- 能执行
-- 能限权
-- 能把大结果存盘
-- 能给模型一个受控引用
-
-只要这一步做好，你的系统就已经比很多 demo agent 更接近真实产品。
-
-### 3. 再做 permission gate
-
-不要只有二选一：
-
-- 完全允许
-- 完全拒绝
-
-更合理的是三层边界：
-
-- 工作区路径
-- harness 自己的内部路径
-- 工作区外部路径
-
-其中内部路径应该是最早被定义出来的能力之一。
-
-### 4. 最后做 host control protocol
-
-无论是本地 UI、SDK host 还是远端容器，最好都不要让工具审批和模式切换散落在业务代码里。
-
-把它们统一抽成一个 control channel，会让你后面做：
-
-- remote mode
-- IDE bridge
-- background tasks
-- multi-agent
-
-时轻松很多。
-
-## 我对 harness 的最终理解
-
-结合当前源码，我更愿意把 harness 理解成下面这句话：
-
-**harness 是 Claude Code 包在模型外面的运行时边界层。它决定模型能看到什么、能调用什么、哪些结果如何回流、哪些状态如何跨回合保存，以及宿主在什么时候接管控制权。**
-
-所以 Claude Code 真正难复制的部分，不只是 prompt，也不只是 loop。
-
-真正难的是这一层：
-
-- 既要让模型像在操作真实世界
-- 又不能真的把整个世界毫无边界地交给模型
-
-harness 就是解决这个矛盾的工程答案。
+**Claude Code 让模型运行在一个经过工程化处理的 harness 里。模型并不是直接碰世界，而是在操作 harness 先整理过的世界。**
 
 ## 关键源码入口
 
 - `src/setup.ts`
 - `src/utils/toolResultStorage.ts`
 - `src/tools/BashTool/BashTool.tsx`
+- `src/utils/mcpOutputStorage.ts`
 - `src/utils/claudeCodeHints.ts`
 - `src/utils/permissions/filesystem.ts`
 - `src/services/SessionMemory/sessionMemory.ts`
 - `src/memdir/memdir.ts`
 - `src/cli/structuredIO.ts`
 - `src/utils/teleport.tsx`
-- `src/context.ts`
+
+## 还需要验证的问题
+
+这篇文章里的判断主要来自 restored source。还有几件事最好后续拿真实运行时验证：
+
+- 远端 CCR 模式下内部目录的真实挂载布局
+- `tool-results` 在 resume / fork 场景下的复制边界
+- `claude-code-hint` 在已安装客户端中的完整 UI 行为
 
 ## 版本假设
 
 - 本文基于 `../claude-code-sourcemap/restored-src/src` 在 2026-03-31 可见的还原源码
 - 文中的“看起来如何工作”以当前源码为准
-- 涉及已安装客户端的运行时差异，仍建议再用 `../extracts/` 或真实运行观察交叉验证
+- 涉及已安装客户端的运行时差异，仍建议结合 `../extracts/` 或真实运行观察交叉验证
