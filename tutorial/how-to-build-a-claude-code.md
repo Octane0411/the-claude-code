@@ -35,6 +35,10 @@
 - [01-overview.md](./01-overview.md)
 - [02-agent-loop.md](./02-agent-loop.md)
 
+## 独立专题
+
+- [Claude Code 是怎么构建 harness 的](./claude-code-harness.md)
+
 ## 每章模板
 
 每一章都应尽量包含：
