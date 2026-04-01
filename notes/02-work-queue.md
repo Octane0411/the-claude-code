@@ -68,6 +68,7 @@
   - 正文成文前最好等待 T1 术语稳定
 - 备注：
   - 2026-03-31：已完成 `notes/04-context-memory.md`，明确拆出静态上下文注入、动态相关记忆召回、session memory、durable auto-memory extraction 四条链路，并补入与 `agent loop` 的连接点、最小复刻顺序和待验证问题
+  - 2026-04-01：已基于这份研究底稿把 `tutorial/03-context-management.md` 重写成“先结论、先地图、先主流程、再分层解释”的 reader-facing 版本，并把 `Context` 与 `Memory`、`systemPrompt` 与 `userContext` 的边界单独讲清
 
 ### T3. Tools + Permissions 研究笔记
 
@@ -184,6 +185,31 @@
   - 2026-03-31：先在 `notes/` 里固定 “harness = runtime shell” 的研究提纲，再产出一篇独立教程文章
   - 暂不调整主教程章节编号，把这篇作为 standalone topic 处理
   - 2026-03-31：按用户反馈重写正文风格，从“分层概念讲解”改成更接近 Anthropic Engineering 的问题驱动、失败模式与设计取舍叙事
+
+### T9. 上下文压缩正文
+
+- 优先级：P1
+- 状态：done
+- 类型：正文章节
+- 目标：把“上下文太长以后怎么缩回可运行范围”从 `Context` 章节中拆出来，单独写成 tutorial 章节
+- 产物：
+  - `tutorial/04-context-compaction.md`
+  - `tutorial/how-to-build-a-claude-code.md`
+- 主要文件：
+  - `../claude-code-sourcemap/restored-src/src/query.ts`
+  - `../claude-code-sourcemap/restored-src/src/setup.ts`
+  - `../claude-code-sourcemap/restored-src/src/screens/REPL.tsx`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/autoCompact.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/compact.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/microCompact.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/prompt.ts`
+- Definition of Done：
+  - 解释预防性压缩与 overflow recovery 两阶段
+  - 明确 `tool result budget`、`snip`、`microcompact`、`context collapse`、`autocompact` 的相对位置
+  - 明确 `/compact`、partial compact 与自动压缩不是同一件事
+  - 在证据边界内说明 `context collapse` 的定位，并标出当前 sourcemap 的缺口
+- 备注：
+  - 2026-04-01：已完成，写法优先采用“先地图、再主流程、再分层解释”的结构，并把章节索引更新到主教程目录中
 
 ## 下一个默认动作
 

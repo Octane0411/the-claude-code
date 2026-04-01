@@ -302,3 +302,55 @@
 - 下一步：
   - 如用户认可这版叙事风格，可继续用同样方法改写后续正文章节
   - 回到默认主线，继续 `Tasks + Subagents` 研究笔记
+
+## 2026-04-01 - 新增上下文压缩章节
+
+- 完成：
+  - 新增 `tutorial/04-context-compaction.md`
+  - 把“上下文太长以后怎么缩回可运行范围”从 `Context` 章节中拆出来，单独写成 tutorial 正文
+  - 采用“先结论、先地图、先主流程，再逐层解释”的结构，补齐 `tool result budget`、`snip`、`microcompact`、`context collapse`、`autocompact`、overflow recovery、`/compact` 与 partial compact 的相对关系
+  - 在教程索引中加入第 4 章，并顺延后续暂定章节编号
+- 依据：
+  - `../claude-code-sourcemap/restored-src/src/query.ts`
+  - `../claude-code-sourcemap/restored-src/src/setup.ts`
+  - `../claude-code-sourcemap/restored-src/src/screens/REPL.tsx`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/autoCompact.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/compact.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/microCompact.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/compact/prompt.ts`
+- 更新文件：
+  - `tutorial/04-context-compaction.md`
+  - `tutorial/how-to-build-a-claude-code.md`
+  - `notes/02-work-queue.md`
+  - `notes/03-work-log.md`
+- 阻塞 / 风险：
+  - 当前 restored source tree 没有 `services/contextCollapse/index.js` 的完整实现，所以这一章能清楚讲主链位置和职责，但还不能把 collapse 内部算法写得很实
+  - `notes/diagrams/permission-context-and-tool-pool.drawio` 当前是未跟踪文件，这轮没有动它
+- 下一步：
+  - 若继续正文链，可以回头把 `tutorial/03-context-management.md` 再按同样风格压一轮
+  - 若继续默认 backlog，则按队列进入 `T6 Tasks + Subagents`
+
+## 2026-04-01 - 重写上下文管理章节
+
+- 完成：
+  - 重写 `tutorial/03-context-management.md`
+  - 把原先偏“按源码分段解释”的写法，改成和第 4 章一致的结构：先结论、先总图、先主流程，再讲源码入口和四层静态注入
+  - 单独讲清 `systemPrompt`、`userContext`、`systemContext` 的职责边界，以及 `Context` 与 `Memory`、git snapshot 与实时状态、静态注入与代码读取之间的区别
+  - 补入 `main.tsx` 里 deferred prefetch 和 trust gate 对 `systemContext` 的影响，避免把上下文预取写成无条件行为
+- 依据：
+  - `../claude-code-sourcemap/restored-src/src/screens/REPL.tsx`
+  - `../claude-code-sourcemap/restored-src/src/constants/prompts.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/systemPrompt.ts`
+  - `../claude-code-sourcemap/restored-src/src/context.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/claudemd.ts`
+  - `../claude-code-sourcemap/restored-src/src/main.tsx`
+- 更新文件：
+  - `tutorial/03-context-management.md`
+  - `notes/02-work-queue.md`
+  - `notes/03-work-log.md`
+- 阻塞 / 风险：
+  - 当前章节仍然以 sourcemap 为主，没有结合本机提取物验证某些 feature-flag 分支在当前安装版本里的实际开启状态
+  - 文中保留了少量源码名词如 `toolUseContext`，后续如果用户继续要求降术语密度，还可以再压一轮
+- 下一步：
+  - 按用户要求提交并推送当前文档改动
+  - 推送后默认仍回到 `T6 Tasks + Subagents`

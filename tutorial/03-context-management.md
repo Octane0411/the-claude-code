@@ -2,86 +2,37 @@
 
 ## 这篇文章要回答什么
 
-在上一章里，我们把 Claude Code 的中心定位成了 `query()` 驱动的 agent loop。
+上一章我们已经把 Claude Code 的核心抓成了：
 
-但只知道“它会进 loop”还不够。真正决定系统表现的另一个关键问题是：
+- 一个持续运行的 `query()` agent loop
 
-**每次进 loop 之前，模型到底看到了什么？**
+但只知道“它会进 loop”还不够。
 
-很多人实现 agent CLI 时，会把“上下文管理”理解成三件事之一：
+真正决定模型这一轮怎么判断、怎么选工具、怎么继续工作的，是另一个更具体的问题：
 
-- 把消息历史直接发给模型
-- 在 system prompt 里塞一大段项目说明
-- 做一个 repo summary，然后希望模型自己想明白剩下的事
+**在调用模型之前，Claude Code 到底把哪些东西放进了上下文？**
 
-Claude Code 的做法要克制得多，也更工程化。
+很多人做 agent CLI 时，会把这个问题理解成下面三种之一：
 
-这篇文章要拆清楚的是：
+- 把消息历史原样发给模型
+- 把一大段仓库说明塞进 system prompt
+- 做一个 repo summary，希望模型自己补全剩下的细节
 
-- `system prompt`、`user context`、`system context` 在源码里分别是什么
-- `CLAUDE.md` 家族文件是怎么发现、排序和注入的
-- git 状态为什么只取会话开始时的快照
-- 哪些内容属于“静态上下文注入”，哪些内容已经属于 memory 系统
-- 如果你自己实现一个 Claude Code-like 系统，最小可用的上下文层应该怎么搭
+Claude Code 不是这么做的。
+
+它把“这一轮固定会带进去的内容”拆成了几层，而且这些层的职责很清楚：
+
+- system prompt 负责“你应该怎么工作”
+- user context 负责“这个用户 / 项目额外要求你怎么工作”
+- system context 负责“当前会话开始时，外部环境大概是什么样”
+
+这一章要讲清楚的就是这三层。
 
 ## 先给结论
 
-Claude Code 并不是把“当前仓库的一切信息”都塞进模型上下文。
+Claude Code 并不会把“整个项目的一切信息”都塞进模型上下文。
 
-它真正做的是把上下文拆成三层：
-
-1. `defaultSystemPrompt`
-   - Claude Code 的基础行为规则、工具使用规则、环境信息、MCP 提示、scratchpad 规则等
-2. `userContext`
-   - `CLAUDE.md` 家族文件拼出来的用户 / 项目指令，以及当前日期
-3. `systemContext`
-   - 当前会话开始时的 git snapshot，以及少量系统级注入信息
-
-在 REPL 里，这三层会在 query 前并行准备，然后一起传进 `query()`。
-
-更重要的是：
-
-- `Context` 这一章只处理“这一轮固定会被带进去的内容”
-- 动态相关记忆召回、session memory、durable extraction 不属于这一章，它们属于后面的 `Memory` 章节
-
-如果把这两类东西混在一起，你很快就会把 Claude Code 的上下文系统误读成“一个大而全的 prompt 拼接器”。
-
-## 先建立边界：Context 不等于 Memory
-
-这套教程后面会专门写 `Memory`，所以这一章必须先把边界卡住。
-
-从当前源码看，可以先做一个简单判断：
-
-- 每轮 query 前固定准备的，属于 `Context`
-- 查询进行中异步召回的、跨会话沉淀的、长会话压缩的，属于 `Memory`
-
-所以：
-
-- `getSystemPrompt(...)`
-- `getUserContext()`
-- `getSystemContext()`
-
-是这章的主角。
-
-而下面这些，先只点到为止：
-
-- `startRelevantMemoryPrefetch(...)`
-- `SessionMemory`
-- `extractMemories`
-
-它们会影响模型最终看到的材料，但不属于“每轮固定静态注入”的主路径。
-
-## 一次 query 之前，Claude Code 实际会组哪些输入
-
-在 `src/screens/REPL.tsx` 里，`onQueryImpl()` 会在真正调用 `query()` 之前并行准备：
-
-- `getSystemPrompt(...)`
-- `getUserContext()`
-- `getSystemContext()`
-
-然后再通过 `buildEffectiveSystemPrompt(...)` 把默认 system prompt 和 agent / custom prompt 合成最终的 `systemPrompt`。
-
-所以进入 `query()` 的关键上下文，不只是消息历史，而更像这样：
+它更像是在每轮 query 前组一个固定输入包：
 
 ```text
 messages
@@ -91,378 +42,534 @@ messages
 + toolUseContext
 ```
 
-这里最值得注意的不是字段名称，而是 Claude Code 的组织方式：
+其中这一章真正关心的是前 3 个静态注入层：
 
-- 把“行为规则”与“项目 / 用户说明”分开
-- 把“用户说明”与“系统快照”分开
-- 把“固定注入”与“动态召回”分开
+1. `systemPrompt`
+   - Claude Code 的基础行为规则、环境信息、工具使用规则、MCP 指令、scratchpad 规则等
+2. `userContext`
+   - `CLAUDE.md` 家族文件，加上当前日期
+3. `systemContext`
+   - 当前会话开始时的一份 git snapshot，外加少量系统级注入信息
 
-这比“所有东西都拼进一个 prompt 字符串”更容易维护，也更容易缓存。
+更重要的是：
 
-## 第 1 层：`getSystemPrompt()` 负责通用行为规则，不负责项目知识
+- 这一章只讲“每轮固定会被带进去的内容”
+- 不讲动态相关记忆召回
+- 不讲 session memory
+- 也不讲上下文压缩
 
-很多人第一次看到 `Context` 会先去找 `CLAUDE.md`。但从 Claude Code 的结构看，真正最外层还是 system prompt。
+如果把这些全混在一起，你会很快把 Claude Code 误读成一个“把所有材料都拼进 prompt 的大拼接器”。
 
-相关入口主要在：
+## 先看地图
+
+如果你现在只想先抓住大图，可以先把 Claude Code 的上下文管理想成这样：
+
+```text
+启动后
+  -> 后台预取一部分静态上下文
+
+用户提交输入
+  -> REPL 并行准备：
+       - getSystemPrompt(...)
+       - getUserContext()
+       - getSystemContext()
+  -> buildEffectiveSystemPrompt(...)
+  -> 连同 messages / toolUseContext 一起传进 query()
+```
+
+再把它拆细一点，就是：
+
+```text
+                        +-----------------------------+
+                        | getSystemPrompt(...)        |
+                        | 基础行为规则 / env / MCP    |
+                        +-----------------------------+
+                                      |
+                                      v
+                        +-----------------------------+
+                        | buildEffectiveSystemPrompt  |
+                        | agent/custom/append 合成    |
+                        +-----------------------------+
+                                      |
+                                      v
+messages --------------------------> query(...)
+                                      ^
+                                      |
+                 +-------------------------------------------+
+                 |                                           |
+                 v                                           v
+   +-----------------------------+           +-----------------------------+
+   | getUserContext()            |           | getSystemContext()          |
+   | CLAUDE.md 家族 + 当前日期   |           | git snapshot + cacheBreaker |
+   +-----------------------------+           +-----------------------------+
+```
+
+这张图里最重要的判断是：
+
+- `systemPrompt` 不是项目知识
+- `userContext` 不是消息历史
+- `systemContext` 不是实时环境同步
+
+它们都是“静态注入层”，但不是同一种东西。
+
+## 再看一条主流程
+
+在 `REPL.tsx` 里，真正调用 `query()` 之前，大致会经过下面这条路径：
+
+```text
+onQueryImpl()
+  -> Promise.all(
+       getSystemPrompt(...),
+       getUserContext(),
+       getSystemContext()
+     )
+  -> buildEffectiveSystemPrompt(...)
+  -> query({
+       messages,
+       systemPrompt,
+       userContext,
+       systemContext,
+       toolUseContext,
+     })
+```
+
+另外还有一个容易被忽略的点：
+
+- `getUserContext()` 是 memoized 的
+- `getSystemContext()` 也是 memoized 的
+
+也就是说，这两层不是每个 turn 都重新从头算一遍。
+
+它们更像：
+
+- “在当前会话里缓存的一份静态上下文快照”
+
+这对首轮延迟和 prompt cache 都很重要。
+
+## 先记住四个容易混淆的边界
+
+### 1. `systemPrompt` 不等于 `userContext`
+
+`systemPrompt` 主要回答的是：
+
+- 你应该怎么工作
+
+`userContext` 主要回答的是：
+
+- 这个用户 / 这个项目额外要求你怎么工作
+
+这两者都可能包含“规则”，但来源和生命周期不一样。
+
+### 2. `Context` 不等于 `Memory`
+
+这一章讲的是：
+
+- 每轮固定静态注入
+
+后面 `Memory` 章节才会讲：
+
+- 动态相关记忆召回
+- session memory
+- durable extraction
+
+### 3. `systemContext` 不等于“实时仓库状态”
+
+Claude Code 注入的是：
+
+- 会话开始时的一份 git snapshot
+
+不是：
+
+- 每一轮都重新抓一份最新 git 状态
+
+### 4. 被注入进上下文，不等于“模型已经读过代码”
+
+`CLAUDE.md`、git snapshot、system prompt 只是工作背景。
+
+它们不能替代：
+
+- Read 工具真正读取文件
+- 搜索代码
+- 检查当前实现
+
+这也是为什么 Claude Code 仍然强依赖工具，而不是只靠超长 prompt。
+
+## 先抓源码入口
+
+如果你想顺着源码把这条链走一遍，最值得先看的就是这几个文件：
+
+- `src/screens/REPL.tsx`
+  - query 前怎么组装上下文
+- `src/constants/prompts.ts`
+  - 默认 system prompt 里到底放了哪些 section
+- `src/utils/systemPrompt.ts`
+  - 最终 system prompt 的合成优先级
+- `src/context.ts`
+  - `getUserContext()` 和 `getSystemContext()`
+- `src/utils/claudemd.ts`
+  - `CLAUDE.md` 家族文件的发现、排序和过滤规则
+- `src/main.tsx`
+  - 启动后如何做 deferred prefetch，以及为什么 `systemContext` 受 trust gate 约束
+
+这几个文件合起来，基本就能把“模型这一轮固定看到什么”讲完整。
+
+## 第 1 层：`getSystemPrompt()` 负责基础行为规则
+
+从结构上说，Claude Code 最外层先准备的不是项目说明，而是 system prompt。
+
+对应入口在：
 
 - `src/constants/prompts.ts`
-- `src/utils/systemPrompt.ts`
 
-`getSystemPrompt(...)` 负责生成默认 system prompt section。它里面装的主要不是“当前项目的事实”，而是：
+`getSystemPrompt(...)` 返回的不是一整块写死字符串，而是一组 section。
 
-- 会话指导规则
+从当前源码看，里面主要包括：
+
+- Claude Code 的基础身份和工作方式
+- tool 使用规则
+- 会话 guidance
 - memory 使用规则
 - 环境信息
 - 语言与输出风格
 - MCP instructions
 - scratchpad instructions
-- function result clearing / summarize tool results 之类的运行规则
+- function result clearing
+- summarize tool results
 
-这里有一个很重要的判断：
+最值得注意的是：
 
-**Claude Code 把“怎么工作”放进 system prompt，把“当前项目是什么”放进 user/system context。**
+**这里放的是“工作协议”，不是“项目事实”。**
 
-这是个非常好的分层。
+这是一条很重要的设计边界。
 
-如果你把项目说明也全塞进 system prompt，会遇到两个问题：
+如果你把项目说明也全部塞进 system prompt，会很快遇到两个问题：
 
-- prompt 太长，且难以缓存
-- 行为规则和项目事实混在一起，后续难以做差异更新
+- system prompt 膨胀得太快
+- 行为规则和项目材料混在一起，后面很难按来源更新
 
-## 第 2 层：`buildEffectiveSystemPrompt()` 决定最终 system prompt 长什么样
+## 第 2 层：`buildEffectiveSystemPrompt()` 负责最终组装
 
-`getSystemPrompt(...)` 还不是最终传给模型的版本。
+`getSystemPrompt(...)` 还不是最终发给模型的版本。
 
 在：
 
 - `src/utils/systemPrompt.ts`
 
-里，`buildEffectiveSystemPrompt(...)` 还会继续处理优先级：
+里，Claude Code 还会再走一次显式组装：
 
-1. override system prompt
-2. coordinator prompt
-3. agent prompt
-4. custom system prompt
-5. default system prompt
-6. append system prompt
+```text
+override
+  -> coordinator
+  -> agent
+  -> custom
+  -> default
+  -> append
+```
 
-这说明 Claude Code 从一开始就承认：
+更准确地说：
 
-- system prompt 不是一个固定常量
-- 不同运行模式可能会替换或追加 prompt
-- 但这个替换逻辑应该发生在专门的 prompt 组合层，而不是散落在 REPL 或 query loop 里
+- 如果有 `overrideSystemPrompt`，它直接替换全部
+- 如果在 coordinator mode，就走 coordinator prompt
+- 如果当前主线程 agent 自带 prompt，就用 agent prompt
+- 否则才考虑 custom / default
+- `appendSystemPrompt` 再统一挂到最后
 
-如果你自己实现，最好也把这层显式抽出来。否则后面一旦引入：
+这层非常值得抄。
 
-- 自定义 agent
-- 协调器模式
-- 用户自定义 `--system-prompt`
+因为它解决的是一个常见工程问题：
 
-你的 prompt 拼装逻辑很快就会失控。
+- prompt 不会永远只有一种来源
 
-## 第 3 层：`getUserContext()` 负责项目 / 用户指令注入
+只要你后面想支持：
+
+- custom agent
+- coordinator mode
+- `--system-prompt`
+- runtime append prompt
+
+你迟早都需要一个独立的“prompt 合成层”。
+
+## 第 3 层：`getUserContext()` 负责注入 `CLAUDE.md` 家族
 
 真正和“Claude Code 会读哪些 instruction files”直接相关的，是：
 
 - `src/context.ts`
 - `src/utils/claudemd.ts`
 
-`getUserContext()` 本身非常克制。它最终只返回两样东西：
+`getUserContext()` 的返回值其实很克制，当前只有两样：
 
 - `claudeMd`
 - `currentDate`
 
-也就是说，Claude Code 的“用户上下文”不是：
+也就是说，Claude Code 的 user context 不是：
 
-- 整个项目文件树
-- 全量代码索引
-- 大模型生成的 repo summary
+- 项目全量摘要
+- 文件树索引
+- 自动生成的 repo knowledge base
 
 而是：
 
-- `CLAUDE.md` 家族文件
+- 一组显式 instruction files
 - 一个当前日期字符串
 
-这很重要。Claude Code 并不默认替用户做一个“大上下文蒸馏器”，而是先把最稳定、最明确、最可控的 instruction files 注入进去。
+这一点非常重要。
 
-## `CLAUDE.md` 不是单文件，而是一整套发现规则
+它说明 Claude Code 默认更信任：
 
-`src/utils/claudemd.ts` 顶部的注释已经把发现规则写得很清楚。
+- 用户明确写下来的规则
 
-当前顺序可以概括成：
+而不是：
+
+- 系统替用户“猜出来”的项目总结
+
+### `getUserContext()` 什么时候会直接跳过
+
+源码里有两个显式 gate：
+
+- `CLAUDE_CODE_DISABLE_CLAUDE_MDS`
+- `--bare` 且没有 `--add-dir`
+
+这说明 Claude Code 对 instruction files 的态度是：
+
+- 默认自动发现
+- 但用户可以明确关掉
+- bare mode 下也不会偷偷替你扫项目
+
+### `CLAUDE.md` 不是单文件，而是一套加载规则
+
+`claudemd.ts` 顶部注释已经把发现顺序写得很清楚：
 
 1. `Managed`
 2. `User`
-3. 从 root 到 CWD 逐层发现的 `Project`
+3. 从 root 到当前工作目录逐层发现的 `Project`
 4. 同路径上的 `Local`
 5. 可选的 `--add-dir`
 6. memdir 的 `MEMORY.md`
 7. team memory 的 `MEMORY.md`
 
-其中最值得你实现时学习的，不是“文件很多”，而是这两个原则：
+而且 Project 层不只是 `CLAUDE.md` 一个文件，还包括：
 
-- checked-in instructions 和 private instructions 被明确分开
-- 离当前工作目录更近的项目级规则，优先级更高
+- `.claude/CLAUDE.md`
+- `.claude/rules/*.md`
 
-这让 Claude Code 能同时支持：
+其中离当前工作目录更近的规则，优先级更高。
 
-- 全局个人偏好
-- 仓库级规范
-- 私有项目本地规则
+你可以把这套设计理解成：
 
-而不用靠一份无限膨胀的 `~/.config/agent/prompt.md` 硬扛所有事情。
+- 全局规则
+- 用户私有规则
+- 仓库共享规则
+- 当前项目本地私有规则
 
-## `CLAUDE.md` 家族的真正价值，是把“指令来源”显式化
+四类来源被显式拆开了。
 
-很多系统喜欢在 UI 里做“自动学习你的偏好”，但最后很难解释模型为什么会这样表现。
+这比“一份无限膨胀的全局提示词”更可追溯，也更适合团队协作。
 
-Claude Code 在这件事上相对保守：
+### `filterInjectedMemoryFiles()` 暗示了 Context 和 Memory 正在继续拆开
 
-- 用户知道哪些文件会被读
-- 仓库维护者知道哪些规则是 checked-in 的
-- 私有规则和共享规则是分开的
+还有一个很值得注意的细节。
 
-这种显式化非常重要，因为它让行为可追溯。
-
-如果你想做一个“真的能让团队放心用”的 agent CLI，这种可追溯性通常比“再多一点神秘智能”更值钱。
-
-## `filterInjectedMemoryFiles()` 暗示了 Context 和 Memory 正在被继续拆开
-
-`getUserContext()` 在读取 memory files 后，不是直接全部拼进去，而是会先经过：
+在 `getUserContext()` 里，`getMemoryFiles()` 的结果不会直接全部注入，而是先经过：
 
 - `filterInjectedMemoryFiles(...)`
 
-这个函数背后有一个关键 feature flag：
+这个过滤背后的关键开关是：
 
-- 当 `tengu_moth_copse` 关闭时，`AutoMem` / `TeamMem` 也会像普通注入文件那样进入 prompt
-- 当它开启时，这些 entrypoint 会被跳过，因为相关记忆会改走动态召回链
+- `tengu_moth_copse`
 
-这里透露出一个很重要的架构方向：
+当它打开时：
 
-**Claude Code 正在把“固定静态指令”与“动态记忆材料”进一步分离。**
+- `AutoMem`
+- `TeamMem`
 
-这也是为什么这一章一定不要把 Memory 混进来。连 Claude Code 自己都在把两者拆开。
+这些记忆入口就不再作为静态注入文件直接进 prompt。
+
+它们会改走后面的动态召回链。
+
+这件事透露出的信号很明确：
+
+**Claude Code 自己也在把“静态指令”与“动态记忆”继续拆开。**
+
+所以这章只讲 `Context`，不把 `Memory` 硬塞进来，是符合源码演进方向的。
 
 ## 第 4 层：`getSystemContext()` 负责会话级系统快照
 
-`src/context.ts` 里的 `getSystemContext()` 是另一条完全不同的链。
+`src/context.ts` 里的另一条链是：
 
-它处理的不是用户指令，而是系统级快照信息，当前最核心的是：
+- `getSystemContext()`
 
-- git status
+它和 `getUserContext()` 不是一回事。
+
+`getSystemContext()` 处理的不是 instruction files，而是系统级快照。
+
+当前最核心的内容是：
+
 - current branch
 - default branch
+- `git status --short`
 - recent commits
-- 可选的 cache breaker 注入
+- 可选的 `cacheBreaker`
 
-这里最值得注意的是它的语义：
+其中 `git status` 还有一个很重要的限制：
 
-源码明确说明，这是一份：
+- 超过 2000 个字符会被截断
+- 并明确提示模型，如果还想看更多，请用 BashTool 自己跑 `git status`
 
-**conversation start snapshot**
+这也是很成熟的做法。
 
-也就是说，它不是一个会自动刷新、始终反映最新工作区状态的 live context。
+它说明 Claude Code 不会因为“想多给一点上下文”就把 prompt 无限撑大。
 
-Claude Code 这里做了一个很清醒的取舍：
+### 最关键的语义：这是一份 snapshot
 
-- 只在会话开始时给模型一个 repo 状态定位
-- 后面如果状态变了，更依赖工具调用去拿最新信息
+源码返回的文案已经直接写明了：
 
-这是对的。
+- 这是会话开始时的 git status snapshot
+- 它在对话过程中不会自动更新
 
-如果你强行想让 prompt 永远携带“最新 git 状态”，会有几个明显问题：
+这点必须记住。
 
-- 代价高
-- prompt cache 命中率差
-- 状态变化会造成上下文不停抖动
-- 最终反而让模型更依赖一份可能过时的描述，而不是实际去读文件或跑命令
+Claude Code 不是想维护一份“永远最新的 repo 镜像 prompt”。
 
-## 为什么 git status 会被截断
+它只是给模型一个：
 
-`getGitStatus()` 里有一个 `MAX_STATUS_CHARS = 2000` 的硬限制。
+- 当前会话开始时的大致定位
 
-超过长度时，它不会继续扩展 prompt，而是给出一个明确提示：如果你需要更多，请调用 Bash 工具去看真正的 `git status`。
+后面如果状态变了，模型应该靠工具重新确认。
 
-这个设计非常成熟，因为它体现了一个 Claude Code 反复在做的选择：
+### 并不是所有模式都会去抓 git snapshot
 
-- prompt 里只放“够定位问题”的摘要
-- 真正的大量信息，交给工具按需获取
+源码里还有两个显式跳过条件：
 
-这和很多简单 agent 的思路正好相反。后者往往喜欢把能塞的都塞进去，结果 prompt 又长又不稳定。
+- `CLAUDE_CODE_REMOTE`
+- `shouldIncludeGitInstructions()` 关闭
 
-## 第 5 层：预取策略本身也是上下文系统的一部分
+也就是说，`systemContext` 不是无条件注入的。
+
+它依赖运行模式和配置。
+
+## 第 5 层：启动后会做 deferred prefetch，但 `systemContext` 受 trust gate 保护
+
+这一层很多人会忽略，但其实很能体现 Claude Code 的工程味。
 
 在：
 
 - `src/main.tsx`
 
-里，`startDeferredPrefetches()` 会在首屏之后启动几类预取，其中和上下文直接相关的是：
+里，`startDeferredPrefetches()` 会在首屏渲染后做后台预取。
+
+这里至少有两条和上下文直接相关：
 
 - 总是预取 `getUserContext()`
-- 只在 non-interactive 或 trust 已建立时预取 `getSystemContext()`
+- 只在安全条件满足时预取 `getSystemContext()`
 
-这个策略很值得注意。
+为什么 `systemContext` 要更谨慎？
 
-它说明 Claude Code 不是只关心“上下文内容对不对”，还关心：
+源码注释直接说了原因：
 
-- 哪些内容便宜，适合预热
-- 哪些内容有额外副作用或信任要求，不该太早做
+- git 命令可能通过 hooks 和 config 执行任意代码
 
-也就是说，上下文系统在 Claude Code 里不只是 prompt 内容问题，也是启动性能和安全边界问题。
+所以 Claude Code 不会在 interactive 模式下一启动就盲目预取 git snapshot。
 
-## `Context` 这一层为什么看起来“信息不多”
+只有两种情况下它才会这么做：
 
-第一次读到这里，你可能会觉得 Claude Code 的静态上下文非常少：
+1. non-interactive 模式
+2. 用户已经通过 trust gate
 
-- 没有全量代码库摘要
-- 没有自动生成的 architecture overview
-- 没有预先塞进去的函数索引
+这点非常值得抄。
 
-这其实正是它做得比较成熟的地方。
+因为它体现的是：
 
-Claude Code 依赖的是一个组合：
+- 首轮响应速度优化
+- 和安全边界
 
-- system prompt 给行为规则
-- `CLAUDE.md` 给明确指令
-- system context 给 repo 起点定位
-- tool system 在需要时获取真实细节
+被同时考虑了，而不是只顾着“能不能更快”。
 
-这种设计有两个好处：
+## 把这一章放回整体教程里看
 
-1. prompt 更稳定
-2. 模型被鼓励去“看真实世界”，而不是过度相信一份提前蒸馏好的摘要
-
-这也是为什么 Claude Code 能比较自然地把工具系统和上下文系统扣在一起。
-
-## 这一章不该展开的内容
-
-为了后面的章节清楚，这里要明确三件暂时不展开的事。
-
-### 1. 动态相关记忆召回
-
-`query.ts` 里的 `startRelevantMemoryPrefetch(...)` 会在 turn 内异步找“相关记忆文件”，然后以 attachment 的方式补进上下文。
-
-这不是本章的静态注入链。
-
-### 2. Session memory
-
-`SessionMemory` 的目标是给长会话维护 working notes，它本质上是压缩与持久化机制，不是 query 前固定注入的上下文。
-
-### 3. Durable memory extraction
-
-`extractMemories` 这种会后沉淀机制，解决的是跨会话复用，不是本轮 query 的静态构造。
-
-换句话说：
-
-- 本章回答“每轮开始时先带了什么”
-- 后面的 `Memory` 章节回答“中途还会补什么，以后还会留下什么”
-
-## 把 Context 放回 Agent Loop 里看
-
-如果把上一章的 loop 路径和这一章拼起来，可以把 REPL 主线程的 query 前半段简化成：
+到这里，可以把第 2、3、4 章连起来看：
 
 ```text
-用户输入
-  -> processUserInput
-  -> getToolUseContext
-  -> Promise.all(
-       getSystemPrompt(...),
-       getUserContext(),
-       getSystemContext(),
-     )
-  -> buildEffectiveSystemPrompt(...)
-  -> query(...)
+第 2 章：主循环怎么跑
+第 3 章：每轮固定带什么进去
+第 4 章：如果太长了，怎么缩回可运行范围
 ```
 
-这条路径的关键点不在“调用了三个函数”，而在它体现出的架构边界：
+这样就比较完整了。
 
-- `getSystemPrompt(...)` 负责默认规则
-- `buildEffectiveSystemPrompt(...)` 负责最终覆盖与组合
-- `getUserContext()` 负责 instruction files
-- `getSystemContext()` 负责 repo snapshot
+如果只看第 2 章，你知道 Claude Code 会循环调用模型。
 
-这四件事被故意拆开了。
+如果只看第 3 章，你知道每轮 query 前会塞哪些固定上下文。
 
-如果你自己实现，最好也保留这种拆法。
+如果再加上第 4 章，你才知道这些上下文一旦太长，会如何被管理和压缩。
 
-## 如果你要自己实现，一个干净的最小版本应该怎么做
+而真正的 `Memory`，还要等后面单独展开。
 
-很多人会在第一版就试图做：
+## 如果你自己实现，最小应该先做哪几层
 
-- repo indexing
-- embedding retrieval
-- 自动 architecture summary
-- 多层长期记忆
+不要一上来就照抄 Claude Code 的整套上下文系统。
 
-其实没必要。
+更现实的顺序是：
 
-一个足够像 Claude Code 的最小上下文层，可以只做这四步：
+1. 先做一份稳定的 default system prompt
+2. 再做 `CLAUDE.md` 风格的 instruction file 注入
+3. 再加一份会话级 git snapshot
+4. 然后补上 prompt 合成层
+5. 最后再做 memoization 和 deferred prefetch
 
-1. 写一份稳定的默认 system prompt
-2. 扫描 `CLAUDE.md` / `.claude/CLAUDE.md` / `CLAUDE.local.md`
-3. 在会话开始时抓一次 git status snapshot
-4. 把这些内容作为结构化字段传进 query runtime
+这样你会更快得到一个：
 
-然后先停下来。
+- 能工作
+- 好解释
+- 不太容易失控
 
-这时候你已经拥有了一个很像 Claude Code 的基础上下文层，而且复杂度还可控。
+的最小版本。
 
-## 最小实现时，最值得保留的设计
+## 最值得抄的设计
 
-如果只能保留几件事，我会优先保留下面这些。
+如果只能抄几件事，我会优先抄下面这些。
 
-### 1. 把 `system prompt` 和 `user/system context` 分开
+### 1. 把“行为规则”和“项目规则”分层
 
-这能显著减少后面维护 prompt 组合逻辑时的混乱。
+system prompt 和 `CLAUDE.md` 家族不要混写。
 
-### 2. 指令文件做显式优先级，而不是拼接一堆隐式规则
+### 2. 把 `systemContext` 做成 snapshot，而不是每轮实时同步
 
-显式优先级意味着行为更可解释，也更适合团队协作。
+这能显著减少开销，也更符合 prompt 的用途。
 
-### 3. git status 只做 snapshot，不做实时刷新
+### 3. 把 prompt 合成逻辑抽成单独一层
 
-实时刷新听起来更智能，实际上通常更不稳定。
+只要系统支持多个 agent 或多种运行模式，这层迟早都需要。
 
-### 4. 不要急着把 memory 混进静态上下文
+### 4. 让 instruction source 可追溯
 
-先把静态上下文做稳，再考虑动态召回和持久化。
-
-这条顺序非常重要。
+读了哪些文件、按什么优先级进 prompt，最好都能解释清楚。
 
 ## 这一层最容易犯的错误
 
-如果你自己实现，很容易犯下面几种错误。
+### 1. 把所有信息都塞进 system prompt
 
-### 1. 试图把整个仓库压缩成一个 summary
+结果是 prompt 又长又乱，后面也很难做差异更新。
 
-这样做往往很贵，而且一旦过时，误导比帮助更大。
+### 2. 每轮都重新抓 git 状态
 
-### 2. 把行为规则、项目事实、用户偏好全塞进同一个 prompt 字符串
+这样既慢，也会让上下文变得不稳定。
 
-短期看省事，长期看几乎一定会让 prompt 维护变成灾难。
+### 3. 把 `Context` 和 `Memory` 混成一个概念
 
-### 3. 把动态 memory 召回和静态 instruction 注入混为一谈
+最后往往会得到一个“什么都想管、什么都讲不清”的章节。
 
-这样后面你会很难解释：
+### 4. 以为注入了规则文件，模型就等于理解了当前代码
 
-- 这条信息为什么每轮都在
-- 那条信息为什么只在某些 turn 出现
-
-### 4. 让上下文层承担过多“聪明推断”
-
-Claude Code 在这里的成熟之处恰恰是克制。它没有强迫上下文层去替模型和工具系统做所有推理。
+规则文件只是工作背景，不是代码阅读本身。
 
 ## 下一章应该看什么
 
-到这里，我们已经知道：
+到这里，关于“这一轮先带什么进去”这件事已经够清楚了。
 
-- query 前会准备哪些上下文
-- 它们分别从哪里来
-- Claude Code 为什么不把“上下文”做成一个超大 prompt
+接下来最自然的问题就是：
 
-下一步最自然的展开，其实有两条：
+- 这些东西如果太长了怎么办？
 
-- 如果你想继续理解“模型在 loop 里能做什么”，应该去看工具系统
-- 如果你想继续理解“上下文窗口之外的信息怎么流回来”，应该去看记忆系统
+所以下一章就该接：
 
-按主线顺序，下一章我们先看工具系统：Claude Code 是怎么把工具注册、裁剪、执行并重新回注进 loop 的。
+- [04. 上下文压缩：太长以后 Claude Code 怎么缩上下文](./04-context-compaction.md)
