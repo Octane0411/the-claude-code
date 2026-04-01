@@ -566,6 +566,254 @@ Claude Code 会尽量不把它算成真正的 cache break，因为 API 最终会
 
 所以动态 MCP 工具不仅可能让工具数组变化，还可能改变 system prompt 的缓存策略。
 
+## 一个容易混淆的问题：tool 被 deny 后，模型下一轮到底会看到什么
+
+很多人会下意识地把“permission denied”理解成：
+
+- 某个隐藏状态位变了
+- 或者 transcript 里多了一条 UI 通知
+
+从模型上下文视角看，这两种理解都不准确。
+
+真正会进入下一轮上下文的核心变化是：
+
+**Claude Code 会回注一条新的 `user` 消息，里面带一个失败的 `tool_result` block。**
+
+也就是说，模型看到的不是抽象的“权限系统拒绝了”，而是一个非常具体的 tool 调用结果：
+
+```text
+assistant:
+  tool_use(id=toolu_123, name=FileEdit, input=...)
+
+user:
+  tool_result(
+    tool_use_id=toolu_123,
+    is_error=true,
+    content="Permission to use FileEdit has been denied ..."
+  )
+```
+
+这是理解 tool denial 的关键。
+
+### 从运行时到下一轮上下文，完整链路是什么
+
+可以先看一条简化链路：
+
+```text
+模型发出 tool_use
+  -> 运行时做权限判断
+  -> allow: 真正执行工具
+  -> ask/deny: 不执行工具
+  -> 回注一条 user(tool_result, is_error=true)
+  -> 下一轮模型看到这条失败结果
+```
+
+再展开一点：
+
+```text
++----------------------------------------------------------------------------------+
+| 1. assistant message                                                             |
+|    tool_use(id=abc123, name=Bash/FileEdit/...)                                   |
++----------------------------------------------------------------------------------+
+                                       |
+                                       v
++----------------------------------------------------------------------------------+
+| 2. runtime permission check                                                      |
+|    hasPermissionsToUseTool()                                                     |
+|    -> allow / ask / deny                                                         |
++----------------------------------------------------------------------------------+
+                                       |
+                                       v
++----------------------------------------------------------------------------------+
+| 3. if not allow                                                                  |
+|    不执行工具                                                                     |
+|    生成 user message                                                              |
+|    content[0] = tool_result(is_error=true, tool_use_id=abc123, content=...)      |
++----------------------------------------------------------------------------------+
+                                       |
+                                       v
++----------------------------------------------------------------------------------+
+| 4. normalizeMessagesForAPI                                                       |
+|    把 tool_use / tool_result 配成一组                                             |
+|    attachments 做重排或过滤                                                      |
++----------------------------------------------------------------------------------+
+                                       |
+                                       v
++----------------------------------------------------------------------------------+
+| 5. next API request                                                              |
+|    模型看到:                                                                     |
+|    - 之前的 assistant tool_use                                                   |
+|    - 紧随其后的失败 tool_result                                                  |
++----------------------------------------------------------------------------------+
+```
+
+这个回注逻辑在 `src/services/tools/toolExecution.ts`。当权限结果不是 `allow` 时，它会直接构造：
+
+- `type: 'tool_result'`
+- `is_error: true`
+- `tool_use_id: <当前 tool use id>`
+- `content: <拒绝原因>`
+
+然后把它包进一条新的 `user` message 里。
+
+### 这条失败 `tool_result` 为什么这么重要
+
+因为从模型角度，它不是“附加说明”，而是主循环的一部分。
+
+Claude Code 的 agent loop 不是：
+
+- 模型发 tool_use
+- 本地拒绝
+- 模型神奇地知道被拒绝了
+
+而是：
+
+- 模型发 tool_use
+- 本地拒绝
+- 本地显式补一条 tool_result 回去
+- 模型基于这条 tool_result 再决定下一步
+
+所以 deny 之后，模型的心智状态会发生两层变化：
+
+1. 它知道刚才那个具体 tool call 没执行成功
+2. 它知道失败原因是什么
+
+这也是为什么系统 prompt 里会专门提醒：
+
+- 如果用户拒绝了你调用的工具，不要原样重试
+- 应该调整方案或向用户解释为什么需要这个权限
+
+### 拒绝类型不同，回注的文本也不同
+
+这里要分几类。
+
+#### 1. 用户在 permission dialog 里拒绝
+
+这种情况下，回注文本通常是：
+
+- `REJECT_MESSAGE`
+- 或 `REJECT_MESSAGE_WITH_REASON_PREFIX + 用户反馈`
+
+如果用户填写了补充说明，这段说明会直接拼进拒绝消息正文里，成为下一轮上下文的一部分。
+
+也就是说，模型不仅知道“被拒绝了”，还会看到：
+
+- 用户为什么拒绝
+- 用户希望你怎么改方案
+
+#### 2. `dontAsk` 或静态规则直接 deny
+
+这种情况下，不一定经过交互式 permission dialog。
+
+回注文本会变成更直接的拒绝原因，例如：
+
+- `Permission to use <tool> has been denied because Claude Code is running in don't ask mode.`
+- 或基于 deny rule / working directory / safety check 生成的拒绝文本
+
+这类 deny 的核心特点是：
+
+- 模型能看到“拒绝原因”
+- 但一般拿不到用户的自由文本反馈
+
+#### 3. auto mode classifier 拒绝
+
+这类拒绝在 UI 里会被压缩显示成很短的一句，例如：
+
+- `Denied by auto mode classifier`
+
+但那是显示层，不是模型真正看到的原文。
+
+模型上下文里仍然会有那条错误 `tool_result`，只是 UI 为了不把 transcript 渲染得过长，做了特殊识别和简写。
+
+#### 4. plan approval 被拒绝
+
+这和普通 tool deny 不完全一样，但本质上仍然是：
+
+- 用一个失败结果告诉模型“不要继续执行”
+
+只不过它用的是另一套前缀文本，用来明确告诉模型：
+
+- 当前仍然留在 plan mode
+- 这次不是实现被批准，而是计划被拒绝了
+
+### 除了这条 `tool_result`，还会多别的东西吗
+
+会，但要区分“会进模型”和“只给 UI/SDK”。
+
+#### 会进模型的
+
+核心只有一类：
+
+- 那条新的 `user` message，其中包含失败的 `tool_result`
+
+在某些 `ask` 场景下，它还可能带额外的用户反馈内容块。
+
+#### 不会进模型的
+
+有几类是本地辅助信息，不会进入下一轮 API 请求：
+
+- `hook_permission_decision` attachment
+- 一些只为 transcript/UI 服务的显示消息
+- `toolUseResult`、`sourceToolAssistantUUID` 这类本地消息对象上的附加元数据
+
+尤其要注意 `hook_permission_decision`。
+
+运行时在某些 hook 决策路径下会额外插一条 attachment，告诉 UI：
+
+- 这次权限决定来自 hook
+- 结果是 allow / deny
+
+但它在 API 归一化阶段会被直接过滤掉，不会进入模型上下文。
+
+### deny 之后，这条消息会怎么进入下一轮 API
+
+Claude Code 在 `normalizeMessagesForAPI()` 里会做两件关键事：
+
+1. 重排 attachment
+2. 把 `tool_use` 和对应的 `tool_result` 重新配对整理
+
+所以从下一轮模型视角看，它拿到的不是一堆松散消息，而是一条结构上完整的轨迹：
+
+```text
+assistant(tool_use X)
+user(tool_result for X, is_error=true)
+```
+
+这正是 Claude 风格 tool loop 能持续推进的基础。
+
+### deny 对 prompt cache 有什么影响
+
+这件事经常被忽略。
+
+很多人会只盯着 `tools[]` 有没有变化，但 deny 本身就已经会改 `messages prefix`。
+
+因为 deny 会新增一条 `user(tool_result)`，所以下一轮请求的消息前缀一定不同于上一轮。
+
+换句话说：
+
+- 即使工具集合完全没变
+- 一次 deny 也通常会生成一个新的 prefix
+
+这不一定意味着“缓存彻底失效”，但至少意味着：
+
+- 这已经不是上一轮的同一条请求前缀了
+
+所以当你观察到某一轮被拒绝后，下一轮的 cache 行为发生变化，不要只检查：
+
+- tools 变没变
+
+还要检查：
+
+- messages prefix 是不是刚多了一条失败 `tool_result`
+
+### 一句话压缩这个问题
+
+从上下文视角看，tool 被 deny 后，Claude Code 不是给模型塞一个抽象的“permission state changed”信号。
+
+它做的是更简单也更可靠的事：
+
+**把这次失败显式写成一条 `tool_result(is_error=true)`，再把它作为下一轮上下文的一部分发回给模型。**
+
 ## 一个完整例子：`acceptEdits -> plan` 时到底发生了什么
 
 这是理解“tool 变化”和“cache 变化”不是一回事的最好例子。
