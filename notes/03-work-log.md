@@ -377,3 +377,46 @@
 - 下一步：
   - 提交并推送 Prompt Cache 相关文章
   - 推送后默认仍回到 `T6 Tasks + Subagents`
+
+## 2026-04-01 - 完成 Tasks + Subagents 笔记并起正文
+
+- 完成：
+  - 新增 `notes/08-tasks-subagents.md`
+  - 新增 `tutorial/09-subagents-and-tasks.md`
+  - 把主教程目录中的第 9 章改成可点击章节，并加入“当前已完成”
+  - 把 Claude Code 的 subagent 系统收敛成一条完整链：`AgentTool` 选路、`runAgent()` 建子 runtime、`LocalAgentTask/RemoteAgentTask` 托管后台运行、`SendMessage/TaskStop/output file` 组成控制面
+  - 单独讲清 fresh subagent、fork subagent、remote agent、teammate spawn 的边界，以及 runtime task system 与 Todo/task list system 的区别
+- 依据：
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/AgentTool.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/forkSubagent.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/runAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/forkedAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/agentContext.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/agentToolUtils.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/AgentSummary/agentSummary.ts`
+  - `../claude-code-sourcemap/restored-src/src/Task.ts`
+  - `../claude-code-sourcemap/restored-src/src/tasks.ts`
+  - `../claude-code-sourcemap/restored-src/src/tasks/LocalAgentTask/LocalAgentTask.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tasks/RemoteAgentTask/RemoteAgentTask.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tasks/InProcessTeammateTask/InProcessTeammateTask.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tasks/LocalMainSessionTask.ts`
+  - `../claude-code-sourcemap/restored-src/src/tasks/stopTask.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/task/framework.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/SendMessageTool/SendMessageTool.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/resumeAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/TaskCreateTool/TaskCreateTool.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/TaskListTool/TaskListTool.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/TaskGetTool/TaskGetTool.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/TaskUpdateTool/TaskUpdateTool.ts`
+- 更新文件：
+  - `notes/08-tasks-subagents.md`
+  - `tutorial/09-subagents-and-tasks.md`
+  - `tutorial/how-to-build-a-claude-code.md`
+  - `notes/02-work-queue.md`
+  - `notes/03-work-log.md`
+- 阻塞 / 风险：
+  - `tutorial/05-prompt-cache.md` 当前工作树里有本地修改，这轮没有碰它
+  - remote / fork gate 的当前安装版本可达性，仍然没有用本机提取物逐项验证
+- 下一步：
+  - 如果继续正文主线，优先把工具系统写成第 6 章
+  - 如果要收紧证据边界，再回头推进 `T7 Runtime 验证与脚本化`

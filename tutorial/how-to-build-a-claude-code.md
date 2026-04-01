@@ -24,7 +24,7 @@
 6. 工具系统：从工具注册到实际执行
 7. 权限控制：为什么它敢帮你跑命令
 8. 记忆系统：上下文窗口之外的信息如何保存与回流
-9. Subagent 与任务系统：复杂工作是如何被拆开的
+9. [Subagent 与任务系统：复杂工作是如何被拆开的](./09-subagents-and-tasks.md)
 10. CLI 入口与命令分发：用户如何进入主循环
 11. 用 React 和 Ink 构建终端 UI
 12. MCP、插件、IDE Bridge 与外部系统
@@ -39,6 +39,7 @@
 - [03-context-management.md](./03-context-management.md)
 - [04-context-compaction.md](./04-context-compaction.md)
 - [05-prompt-cache.md](./05-prompt-cache.md)
+- [09-subagents-and-tasks.md](./09-subagents-and-tasks.md)
 
 ## 独立专题
 

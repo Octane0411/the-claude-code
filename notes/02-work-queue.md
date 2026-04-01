@@ -131,7 +131,7 @@
 ### T6. Tasks + Subagents 研究笔记
 
 - 优先级：P2
-- 状态：ready
+- 状态：done
 - 类型：并行素材
 - 目标：解释任务拆分、多 agent 和远端执行路径
 - 建议产物：
@@ -144,6 +144,8 @@
   - `../claude-code-sourcemap/restored-src/src/tools/SendMessageTool/*`
 - 依赖：
   - 最好在 T3 稳定后再提升为正文
+- 备注：
+  - 2026-04-01：已完成 `notes/08-tasks-subagents.md`，明确区分 `AgentTool`、`runAgent()`、`LocalAgentTask/RemoteAgentTask`、`SendMessage/Task*` 控制面，以及 fork subagent、fresh subagent、remote agent、teammate spawn 的差异
 
 ### T7. Runtime 验证与脚本化
 
@@ -236,9 +238,53 @@
 - 备注：
   - 2026-04-01：正文与 README 导航已准备完成，本轮按用户要求补做入库与推送
 
+### T11. Subagent 与任务系统正文
+
+- 优先级：P1
+- 状态：done
+- 类型：正文章节
+- 目标：把 Claude Code 的 subagent 写成“spawn API + child runtime + task control plane”的完整教程章节，而不是只讲 AgentTool 的表层行为
+- 产物：
+  - `tutorial/09-subagents-and-tasks.md`
+  - `tutorial/how-to-build-a-claude-code.md`
+- 主要文件：
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/AgentTool.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/runAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/forkedAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/tasks/LocalAgentTask/LocalAgentTask.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tasks/RemoteAgentTask/RemoteAgentTask.tsx`
+  - `../claude-code-sourcemap/restored-src/src/tools/SendMessageTool/SendMessageTool.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools/AgentTool/resumeAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/Task.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/task/framework.ts`
+- Definition of Done：
+  - 解释 fresh subagent、fork subagent、remote agent、teammate spawn 的差异
+  - 讲清 `runAgent()` 与 `createSubagentContext()` 为什么才是子 runtime 核心
+  - 讲清 `LocalAgentTask/RemoteAgentTask`、notification、output file、SendMessage、TaskStop 组成的控制面
+  - 单独指出 runtime task system 与 Todo/task list system 不是同一件事
+- 备注：
+  - 2026-04-01：已完成，写法采用“先结论、先地图、先主流程，再讲控制流与边界”的结构
+
+### T12. 工具系统正文
+
+- 优先级：P1
+- 状态：ready
+- 类型：正文章节
+- 目标：把 `notes/05-tools-permissions.md` 中已有研究底稿转成 reader-facing tutorial 正文
+- 建议产物：
+  - `tutorial/06-tools-system.md`
+- 主要文件：
+  - `../claude-code-sourcemap/restored-src/src/Tool.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/tools/*`
+  - `../claude-code-sourcemap/restored-src/src/query.ts`
+- 依赖：
+  - 可立即开工
+  - 最好保持与 `05-prompt-cache`、`09-subagents-and-tasks` 的术语一致
+
 ## 下一个默认动作
 
 如果用户只说“继续”或“开始这个长程任务”，默认先执行：
 
-1. 执行 T6，开始 `Tasks + Subagents` 研究笔记
-2. 若 T6 暂时无法推进，再执行 T7
+1. 执行 T12，开始工具系统正文
+2. 若需要先补验证材料，再回看 T7
