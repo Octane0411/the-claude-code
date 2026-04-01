@@ -211,6 +211,31 @@
 - 备注：
   - 2026-04-01：已完成，写法优先采用“先地图、再主流程、再分层解释”的结构，并把章节索引更新到主教程目录中
 
+### T10. Prompt Cache 正文
+
+- 优先级：P1
+- 状态：done
+- 类型：正文章节
+- 目标：解释 Claude Code 的 prompt cache 不是“缓存整段 transcript”，而是围绕请求前缀、工具 schema、system blocks 和 message cache marker 运作的一套缓存机制
+- 产物：
+  - `tutorial/05-prompt-cache.md`
+  - `README.md`
+- 主要文件：
+  - `../claude-code-sourcemap/restored-src/src/utils/forkedAgent.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/toolSchemaCache.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/api.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/api/claude.ts`
+  - `../claude-code-sourcemap/restored-src/src/services/api/promptCacheBreakDetection.ts`
+  - `../claude-code-sourcemap/restored-src/src/tools.ts`
+  - `../claude-code-sourcemap/restored-src/src/utils/toolPool.ts`
+- Definition of Done：
+  - 解释 cache-critical prefix 的核心组成
+  - 解释 `tools[]` 与 tool schema 稳定性为什么会影响缓存
+  - 解释 system blocks / message cache marker / deferred tools 对缓存命中的影响
+  - 讲清“一个 session 不是只有一个 prompt cache 对象”的正确心智模型
+- 备注：
+  - 2026-04-01：正文与 README 导航已准备完成，本轮按用户要求补做入库与推送
+
 ## 下一个默认动作
 
 如果用户只说“继续”或“开始这个长程任务”，默认先执行：

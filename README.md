@@ -53,6 +53,7 @@
 
 - `tutorial/01-overview.md`
 - `tutorial/02-agent-loop.md`
+- `tutorial/05-prompt-cache.md`
 
 当前研究路线图见：
 

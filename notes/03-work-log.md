@@ -354,3 +354,26 @@
 - 下一步：
   - 按用户要求提交并推送当前文档改动
   - 推送后默认仍回到 `T6 Tasks + Subagents`
+
+## 2026-04-01 - 入库并推送 Prompt Cache 文章
+
+- 完成：
+  - 确认 `tutorial/05-prompt-cache.md` 已写完且已经被主教程总纲引用
+  - 更新 `README.md` 的阅读入口，把 `05-prompt-cache` 加到直接阅读列表里
+  - 在工作队列中补入 Prompt Cache 正文章节条目
+  - 按用户要求移除未跟踪的 `notes/diagrams/permission-context-and-tool-pool.drawio`
+- 依据：
+  - `tutorial/05-prompt-cache.md`
+  - `README.md`
+  - `tutorial/how-to-build-a-claude-code.md`
+- 更新文件：
+  - `README.md`
+  - `tutorial/05-prompt-cache.md`
+  - `notes/02-work-queue.md`
+  - `notes/03-work-log.md`
+- 阻塞 / 风险：
+  - `tutorial/05-prompt-cache.md` 本轮只做入库与导航补齐，没有再做一轮术语压缩；如果用户继续要求“更像 03/04 那样先图后流程”，后面还可以再收一轮
+  - 这轮没有动其余未提交文件，避免把不相关草稿一并推上去
+- 下一步：
+  - 提交并推送 Prompt Cache 相关文章
+  - 推送后默认仍回到 `T6 Tasks + Subagents`
